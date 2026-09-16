@@ -156,7 +156,10 @@ described approach is profitable.
 - US-listed **common stock and ETFs** traded on NYSE, NASDAQ, and NYSE American/Arca.
 - **Intraday only** — every position opened during a session is closed before that session's close
   (§12.4). No overnight exposure, ever.
-- **Long and short.** Shorting is permitted subject to locate/shortability checks (§7.3, §12.3).
+- **Long only in v1** (ADR-0003, resolving O-5). Short selling is deferred: the shortability rules
+  (A7, R-12.2.ac) remain implemented and tested, and additionally reject any short intent while
+  `shorts_enabled` is false. Nothing is deleted — a risk rule removed under one set of assumptions
+  is a risk rule nobody re-derives correctly later.
 - **Regular trading hours (RTH)**, 09:30–16:00 America/New_York, plus a pre-open preparation window.
 - One brokerage account at Alpaca, in exactly one of two environments: paper or live (§11.1).
 
@@ -933,7 +936,7 @@ and reintroduces exactly the overfitting the two-stage split exists to avoid.
 | A4 | Listed ≥ `min_listing_days` (no IPOs without history) | 60 days |
 | A5 | Not in the manual exclusion list (`symbol_exclusions`) | — |
 | A6 | No pending corporate action with ex-date today or tomorrow (split, reverse split, merger, spin-off) | — |
-| A7 | If the candidate direction is short: `shortable` and `easy_to_borrow` | — |
+| A7 | If the candidate direction is short: `shortable` and `easy_to_borrow`. **Inactive in v1** (long-only, ADR-0003) but still evaluated and recorded | — |
 
 **Tier 2 — liquidity (hard, tuned only within a narrow band)**
 
@@ -1834,7 +1837,7 @@ Evaluated in this order. All limits from `RiskConfig` (R-11.2.b).
 | R-12.2.z | Order quantity > 0, ≤ `max_order_shares`, and ≤ `max_participation_pct` of recent minute volume (A14) |
 | R-12.2.aa | Order rate: orders in the last minute < `max_orders_per_minute` (default 10); in the day < `max_orders_per_day` (default 100). A runaway loop is a real failure mode |
 | R-12.2.ab | Idempotency: no existing order with this `client_order_id` in a non-terminal state (R-10.5.a) |
-| R-12.2.ac | If short: symbol is shortable and easy-to-borrow per current reference data |
+| R-12.2.ac | If short: symbol is shortable and easy-to-borrow per current reference data. **In v1, additionally rejects every short intent** while `shorts_enabled` is false (ADR-0003) |
 | R-12.2.ad | Day-trade count check — **config-gated, default disabled** (R-2.4.a) |
 
 **R-12.2.ae** — Every rejection MUST be persisted with its rule ID and the state that caused it, and
@@ -2786,7 +2789,7 @@ in `docs/decisions/` once resolved. Items marked **blocking** must be answered b
 | **O-2** | What is the **total capital** at risk, and the **maximum acceptable loss** — per day, and cumulative before the project stops? | **Phase 6** (sets risk limits), hard-blocks Phase 8 G8 | Every limit in §12.2 derives from this. "I'll decide later" means the limits are arbitrary |
 | **O-3** | ~~Equities or options?~~ **Resolved: equities only** (§2.3, ADR-0002) | — | Confirm the operator accepts this resolution |
 | **O-4** | Confirm **PDT status** directly with Alpaca and record it (R-2.4.b) | **Phase 8** | The spec assumes the rule was retired in June 2026 on the operator's statement. That is not evidence, and if it is wrong, §12 needs rule R-12.2.ad enabled |
-| **O-5** | **Long-only or long and short** at launch? | Phase 5 | Shorting adds locate/borrow handling, different risk asymmetry, and roughly doubles the Stage A eligibility surface. Long-only is a simpler, safer v1 |
+| **O-5** | ~~Long-only or long and short?~~ **Resolved: long-only for v1** (ADR-0003) | — | A long position's worst case is bounded at zero; a short's is not. Accepted cost: fewer opportunities, and results that correlate with the market rather than being neutral |
 | **O-6** | Is the operator's brokerage account **cash or margin**, and is intraday buying power expected? | Phase 5 | Changes sizing, settlement, and whether R-12.2.p's 100% gross default is achievable |
 | **O-7** | **Holding-period intent**: minutes (several trades/day/name) or hours (one or two)? | Phase 4 | Sets `holding_horizon`, the label vertical barrier, feature horizons, and cost sensitivity. Shorter holds mean costs dominate |
 | **O-8** | Which **notification channel** is authoritative for critical alerts, and what phone number/email? Does the operator want push in addition to SMS? | Phase 6 | §13.4 routing |

@@ -3,3 +3,5 @@
 # Format: <name>  <digest>
 0001_audit_log.sql  fab218d18198e1d1
 0002_schema_migrations.sql  2d248e3e318badc4
+0003_data_platform.sql  a90ddaea8a528c47
+0004_bars_daily_partitions.sql  ec7026fb3b2d3588

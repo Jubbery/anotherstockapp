@@ -34,29 +34,27 @@ walk-forward validation · Twilio SMS + Resend email.
 
 ## Status
 
-**Phase 0 built; 🔴 GATE 0 not passed.** See
-[`docs/status/phase-0.md`](docs/status/phase-0.md) for the full report.
+**Phase 0 built (🔴 GATE 0 still open) · Phase 1 in progress.**
+Reports: [`docs/status/`](docs/status/).
 
-Three of five acceptance criteria are met: the `ALPACA_ENV` guard and its
-56 subprocess tests, `.env.example`, and the CI/lint/type/architecture
-scaffolding. 106 tests pass, `mypy --strict` is clean, and five import-linter
-contracts hold — each negative-tested against a deliberate violation.
-`audit_log` is proven append-only against a real Postgres 16, including against
-a superuser table owner.
+213 tests · `mypy --strict` clean · 5/5 import contracts · 4 migrations applied
+and constraint-tested against PostgreSQL 16.
 
-Two criteria need the operator:
+Built so far: the `ALPACA_ENV` guard, the money/price/quantity types, the
+point-in-time adjustment engine, survivorship-safe universe snapshots, the
+market calendar (half-days included), the data platform schema, and the data
+quality gate. Every guard has been negative-tested — a deliberate violation
+introduced, the guard fired, the violation removed.
 
-- **The Alpaca MCP proof of concept has not run** (R-19.1.a) — no MCP server or
-  paper credentials in the build environment. The 20-step script is written and
-  waiting in [`docs/research/`](docs/research/); it tests six specification
-  assumptions, two of which are load-bearing.
-- **No external fact is primary-source verified** — the fee, feed, and rate-limit
-  values in [`docs/SOURCES.md`](docs/SOURCES.md) are PROVISIONAL and may not be
-  relied on by code that trades real money.
+**No market data has been ingested.** The environment's network egress policy
+blocks `paper-api.alpaca.markets` and `data.alpaca.markets`, so the Alpaca MCP
+proof of concept (R-19.1.a) cannot run and every fee, feed, and rate-limit value
+in [`docs/SOURCES.md`](docs/SOURCES.md) remains PROVISIONAL — unusable by code
+that trades real money.
 
 Open items **O-1** (data feed budget) and **O-2** (capital and maximum
-acceptable loss) still block Phases 1 and 6. Every risk limit is a placeholder
-until O-2 is answered.
+acceptable loss) still block. **O-3** (equities only) and **O-5** (long-only for
+v1) are resolved — see [`docs/decisions/`](docs/decisions/).
 
 ## Development
 
