@@ -64,7 +64,8 @@ they were rejected. If you want to change a stack decision, read that first.
 
 ## 1. Product vision
 
-A single-tenant, self-hosted investment platform for one person. It:
+A single-tenant, self-hosted investment platform for one person, trading **US equities only** (options are
+out of scope for v1 — see O-3). It:
 
 1. Connects to a funded brokerage account.
 2. Scans the US equity market each morning and narrows ~8,000 listed names to **50 tradable candidates**.
@@ -1824,14 +1825,35 @@ Do not guess at these — ask, and record the answers here.
 
 | # | Question | Why it matters |
 |---|---|---|
-| **O-1** | Starting capital for the satellite sleeve? | Drives position sizing, whether the $99/mo data cost is rational, and minimum viable trade size |
+| ~~O-1~~ | **RESOLVED (paper):** Alpaca paper accounts start at **$100,000**, which is fine for Phases 0–7. **Still open for live:** the real capital at Gate 8 is undecided — see R-21.a below |
 | **O-2** | Long-only, or long and short? | Shorting adds borrow costs, locate requirements, and unbounded loss risk. **Recommendation: long-only through Phase 8** |
-| **O-3** | Options in scope? | The brief says "day trade stock options," which is ambiguous. **This spec assumes equities only.** Options add enormous complexity — Greeks, assignment, OPRA data, spreads. Recommend deferring to v2. **Confirm the reading** |
+| ~~O-3~~ | **RESOLVED: US equities only.** Options are out of scope for v1. No Greeks, no assignment handling, no OPRA data. Revisit only after a live track record exists |
 | **O-4** | Acceptable max drawdown before shutting down entirely? | This should be decided calmly now, not during a drawdown |
 | **O-5** | Authorization mode for Phase 8 — `manual` or `semi`? | Recommendation: `manual` for the first two weeks live |
 | **O-6** | Monthly budget ceiling? | Baseline ≈ $99 Alpaca SIP data + $25 Supabase + ~$25 Fly = **~$150/mo** before any trading P&L. Notifications are $0 (Section 13). The strategy must clear this before it earns anything |
 | **O-7** | Does the operator have (or qualify for) a BlackRock Advisor Center account? | Determines whether Section 19.2 is usable. The system MUST NOT depend on it either way (R-19.2.a) |
 | **O-8** | Tax situation — is §475(f) mark-to-market worth exploring? | Deadline-bound; needs a CPA (R-18.d) |
+
+### 21.1 The $100k paper account needs one guardrail
+
+Alpaca's paper account defaults to **$100,000**. That is the right environment for Phases 0–7, but it
+introduces a specific trap: a strategy validated at $100k can behave differently at the account size it
+actually goes live with.
+
+Concretely — at $100k with 0.5% risk you size a position at ~$500 of risk, comfortably above minimum share
+granularity and far below any participation cap. At $5k the same percentage produces orders of a few shares,
+where rounding to whole shares becomes a large fraction of intended size, the $100 minimum notional
+(Section 10.2) starts binding, and fixed per-trade costs stop being negligible.
+
+- **R-21.a** Before Gate 8, the operator MUST decide the live starting capital, and the **paper account MUST
+  be reset to approximately that amount** for the final validation period. Alpaca allows resetting paper
+  balances; do it.
+- **R-21.b** Gate 7's four weeks of unattended paper trading MUST run at the intended live capital, not at
+  $100k. Results from a $100k paper account do not transfer to a $5k live account, and believing they do is
+  how a validated strategy becomes an invalidated one on day one.
+- **R-21.c** Until that decision is made, use $100k for development and **treat all P&L figures as relative
+  (percentages), never absolute**. A report that says "made $1,840 today" is meaningless if the live account
+  is a twentieth of the size.
 
 ---
 
