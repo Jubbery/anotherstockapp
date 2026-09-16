@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# R-18.7.a: no job in this workflow may hold live Alpaca credentials.
+# Anything needing a broker uses paper. The secret scan below is what enforces
+# that a live key never reaches the repository in the first place.
+env:
+  PYTHON_VERSION: "3.12"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks scans history, not just the tip
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  quality:
+    name: Lint, types, architecture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --python ${{ env.PYTHON_VERSION }}
+
+      - name: ruff (lint)
+        run: uv run ruff check --output-format=github .
+      - name: ruff (format)
+        run: uv run ruff format --check .
+      - name: mypy --strict
+        run: uv run mypy
+      - name: import-linter (§4.3 architecture contracts)
+        run: uv run lint-imports
+
+      - name: no type:ignore outside adapters (R-5.5.c)
+        run: |
+          if grep -rn "type: *ignore" libs services --include="*.py" \
+              | grep -v "/adapters/"; then
+            echo "::error::type: ignore found outside adapters/ -- see R-5.5.c"
+            exit 1
+          fi
+
+  leakage:
+    name: Leakage suite (blocks merge)
+    runs-on: ubuntu-latest
+    # R-9.1.a. Separated from the main test job so that a red X here is
+    # unambiguous: these guard a class of bug that makes results look BETTER.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --python ${{ env.PYTHON_VERSION }}
+      - run: uv run pytest tests/leakage -v
+
+  test:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --python ${{ env.PYTHON_VERSION }}
+
+      - name: unit, property, golden
+        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+
+      # R-3.2.b / R-12.6.a: 100% BRANCH coverage on the risk governor, as a hard
+      # failure. Activates with the governor in Phase 5; until then the package
+      # holds only its docstring, and 100% of nothing is still 100%.
+      - name: risk governor branch coverage (R-12.6.a)
+        run: |
+          uv run pytest tests/ \
+            --cov=services/engine/risk --cov-branch \
+            --cov-fail-under=100 --cov-report=term-missing -q
+
+  migrations:
+    name: Migrations and audit-log integrity
+    runs-on: ubuntu-latest
+    # R-17.4.b / Phase 8 gate G7: the append-only guarantee is proven by
+    # attempting an UPDATE and a DELETE, not by reading the trigger definition.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ATLAS_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --python ${{ env.PYTHON_VERSION }}
+      - run: uv run pytest tests/integration -v
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    # web/ arrives in Phase 7. The job is declared now so the gate exists before
+    # the code does rather than being added once it is already failing.
+    if: hashFiles('web/package.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run lint
+        working-directory: web
+      - run: npx tsc --noEmit
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      # R-15.6.a: the generated API client must match the OpenAPI schema.
+      - name: generated client is not stale
+        working-directory: web
+        run: |
+          npm run generate:api
+          git diff --exit-code lib/api \
+            || { echo "::error::web/lib/api is stale -- run npm run generate:api"; exit 1; }

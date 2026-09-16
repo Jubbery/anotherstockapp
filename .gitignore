@@ -1,0 +1,33 @@
+# Secrets -- never commit. See MASTER_SPEC Appendix A / §16.3
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+.vercel/
+
+# Data -- never in git. Bars live in Supabase Storage (§6.3.2)
+*.parquet
+*.duckdb
+data/
+models/
+
+# Local
+.DS_Store

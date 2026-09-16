@@ -1,0 +1,43 @@
+# Control plane. MASTER_SPEC §4.2, §14.
+#
+# R-4.2.b: the API never places orders. It writes intents and control state; the
+# engine reads them. Its Alpaca credentials, if any, are read-scoped -- which is
+# what keeps R-3.2.a true even when this service has a bug.
+#
+# R-14.2.a: POST /v1/halt is the highest-priority route in the system and has its
+# own latency SLO (p99 < 300ms server-side). Two machines so a deploy, a crash,
+# or a single-host failure never leaves the kill switch unreachable.
+
+app = "atlas-api"
+primary_region = "ewr"
+
+[build]
+  dockerfile = "../../ops/docker/api.Dockerfile"
+
+[env]
+  ALPACA_ENV = "paper"
+  ATLAS_PHASE = "0"
+  ATLAS_SERVICE = "api"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2     # the kill switch must not depend on one machine
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[[http_service.checks]]
+  interval = "10s"
+  timeout = "2s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/v1/health"
+
+[deploy]
+  strategy = "bluegreen"
+  # R-16.6.b: deploys must not run during market hours with positions open.
+  # Enforced by the deploy pipeline checking engine state, not by this file.

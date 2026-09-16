@@ -3468,10 +3468,19 @@ spread_bps = spread_model(price, adv, minute_volume, minutes_since_open)
 ```
 spread cost      = 8 bps                                   (4 bps each side, twice)
 slippage         = 2 × (2 + 10 × sqrt(200/40000))          = 2 × (2 + 0.707) = 5.4 bps
-SEC + TAF (sell) ≈ 0.3 bps
+SEC fee (sell)   = $10,000 × 20.60/1,000,000 = $0.206      = 0.21 bps   [S-3]
+FINRA TAF (sell) = 200 shares × $0.000195    = $0.039      = 0.04 bps   [S-4]
 misc             = 0.1 bps
-round trip       ≈ 13.8 bps ≈ $13.80 on $10,000
+round trip       ≈ 13.8 bps ≈ $13.75 on $10,000
 ```
+
+The two regulatory fees are rounding error next to the spread, and that is the
+point: **the spread and slippage are ~97% of the cost**, which is why Stage A
+filters hard on spread (A11/A12) and participation (A14) and barely mentions
+fees. It is also why the fee rates still have to be a dated schedule (R-8.3.a):
+the SEC rate was **$0.00/million until 2026-04-04**, so a backtest spanning that
+date with one constant is wrong on one side of it regardless of how small the
+number is.
 
 The trade must clear ~14bps before it earns anything. Rule A17 requires the expected move
 (`ATR% × expected_capture`) to be at least `cost_multiple` = 3× that — here, ~41bps — which for a
@@ -3513,31 +3522,43 @@ Illustrative. Account $50,000, `max_risk_per_trade_pct` 0.5%, `max_concurrent_po
        Sector cap trims 4. Top 50 by stage_a_score written. Scan took 41s. No regime warning.
 09:00  Stage B ranks the 50. Top 10 selected. Top name: CRWD, score 0.83; SHAP says rvol (3.1×) and
        pre-market dollar volume ($41M) dominate.
-09:05  Notification: "PAPER · 10 candidates ready. Max loss if all stop out: $1,250 (2.5%). Authorize?"
+09:05  Notification: "PAPER · 10 candidates ready. Max loss if all stop out: $1,000 (2.0%).
+       Authorize?"   <- the portfolio heat cap (R-12.2.s), not 5 x the per-trade budget
 09:12  Operator reviews, sets capital cap $25,000, long-only, grant expires at 16:00 ET today.
        TOTP entered. Grant #418 written; audit row in the same transaction.
 09:30  Open. Engine subscribes to bars + quotes for the 10.
 09:45  Opening range complete. CRWD trades above its 15-min high on 2.4× volume.
        Stage C: 0.71 > 0.60 threshold. confidence_scalar 0.78.
-       Sizing: stop 1.1% away → risk/share $2.31 → risk budget $250 → 108 shares → × 0.78 → 84 shares.
-       $17,640 notional. Governor: all 30 rules pass. Marketable limit at $210.21. Filled 84 @ $210.18.
-       Protective stop placed 1.4s later at $207.87.
+       Sizing (§12.3): stop 1.1% away -> risk/share $2.31.
+         risk cap      = $250 budget / $2.31        = 108 shares
+         notional cap  = $10,000 (20% of equity)    =  47 shares   <- binds
+         liquidity cap = 1% of median minute volume = 310 shares
+         floor(min(108, 47, 310) x 0.78)            =  36 shares
+       $7,566 notional, $83 at risk. Governor: all 30 rules pass.
+       Marketable limit at $210.21. Filled 36 @ $210.18.
+       Protective stop placed 1.4s later at $207.87; target $214.80 (2 sigma).
 10:02  NVDA triggers. Governor rejects: R-12.2.x — spread 31bps > 25bps limit. No position.
        Visible in /orders with the plain-English reason.
-11:15  CRWD hits the profit target. Exit filled. +$412 realized, −$29 costs. Net +$383.
-13:40  Second entry (PANW) stops out. −$243.
+11:15  CRWD hits the profit target at $214.80. Exit filled. +$166 gross, −$11 costs. Net +$155.
+13:40  Second entry (PANW, 61 shares) stops out. −$113 gross, −$9 costs. Net −$122.
 15:45  WINDING_DOWN. No new entries.
-15:55  One position open (SMCI). Force-flatten: marketable limit, filled on the first attempt.
+15:55  One position open (SMCI). Force-flatten: marketable limit, filled on the first
+       attempt. +$38 gross, −$10 costs. Net +$28.
 16:00  Close. Reconcile against broker: 6 orders, 8 fills, zero discrepancies.
-       pnl_daily: realized +$291, gross +$364, costs $73, 3 trades, 2 wins.
+       pnl_daily: realized +$61, gross +$91, costs $30, 3 trades, 2 wins.
 16:05  Daily report emailed. Tomorrow's readiness: data gate pending, drill age 3 days, model OK.
 17:00  Minute bars archived to Parquet, hash verified, hot table truncated.
 ```
 
-Note what is ordinary here: one rejected candidate, one loser, three trades total, a net of $291 on
-$50,000 (0.58%), and costs at 20% of gross PnL. That last ratio is the number to watch. If it climbs
-toward 50%, the strategy is working for the exchanges rather than the operator, and §8.5's cost
+Note what is ordinary here: one rejected candidate, one loser, three trades total, a net of **$61 on
+$50,000 (0.12%)**, and **costs at 33% of gross PnL**. That last ratio is the number to watch. If it
+climbs toward 50%, the strategy is working for the exchanges rather than the operator, and §8.5's cost
 breakdown is what makes that visible before the equity curve does.
+
+Note also which limit bound the position. The risk budget allowed 108 shares; the 20%-of-equity
+notional cap allowed 47. At this account size the notional cap is usually the binding constraint on
+liquid, low-volatility names, and the risk budget binds on volatile ones. If sizing ever appears to be
+driven by the risk budget alone, something is wrong with the notional check.
 
 ---
 

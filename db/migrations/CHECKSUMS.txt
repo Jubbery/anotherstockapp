@@ -1,0 +1,5 @@
+# sha256[:16] of each migration as released. R-C.a: forward-only.
+# Regenerate ONLY when adding a new migration, never to silence a diff.
+# Format: <name>  <digest>
+0001_audit_log.sql  fab218d18198e1d1
+0002_schema_migrations.sql  2d248e3e318badc4

@@ -1,0 +1,35 @@
+# Secret scanning (R-16.3.c). Runs in CI and, via pre-commit, locally.
+#
+# The rule that matters most for this repository is the Alpaca one: a live key
+# reaching git history is the highest-likelihood, highest-impact failure in the
+# threat model (§16.1), and the remedy is revoke-first (R-16.3.d, Appendix F.5).
+
+title = "Atlas"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "alpaca-key-id"
+description = "Alpaca API key ID"
+regex = '''\b(?:A|P)K[A-Z0-9]{16,}\b'''
+tags = ["alpaca", "credential"]
+
+[[rules]]
+id = "alpaca-secret"
+description = "Alpaca API secret key"
+regex = '''(?i)alpaca[_-]?(?:api[_-]?)?secret[_-]?key["'\s:=]+[A-Za-z0-9/+]{32,}'''
+tags = ["alpaca", "credential"]
+
+[[rules]]
+id = "supabase-service-role"
+description = "Supabase service role JWT"
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}'''
+tags = ["supabase", "credential"]
+
+[allowlist]
+description = "Names without values are the point of .env.example (R-16.3.b)"
+paths = [
+  '''\.env\.example$''',
+  '''docs/MASTER_SPEC\.md$''',
+]

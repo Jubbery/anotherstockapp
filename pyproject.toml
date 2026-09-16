@@ -1,0 +1,111 @@
+[project]
+name = "atlas"
+version = "0.0.0"
+description = "Single-tenant algorithmic day-trading platform. See docs/MASTER_SPEC.md."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic==2.9.2",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi==0.115.4",
+    "uvicorn[standard]==0.32.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.7.3",
+    "mypy==1.13.0",
+    "pytest==8.3.3",
+    "pytest-cov==6.0.0",
+    "pytest-asyncio==0.24.0",
+    "hypothesis==6.119.0",
+    "freezegun==1.5.1",
+    "import-linter==2.1",
+    "asyncpg==0.30.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["libs/atlas_core", "services"]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["libs", "services", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "A",         # builtins shadowing
+    "C4",        # comprehensions
+    "DTZ",       # flake8-datetimez  -- enforces R-5.4.a (no naive datetimes)
+    "T20",       # no print()        -- R-16.3.e: logging goes through the redacting formatter
+    "SIM",       # simplify
+    "TID",       # tidy imports
+    "PTH",       # pathlib
+    "RUF",
+]
+ignore = [
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["T20"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# ---------------------------------------------------------------- mypy
+# R-5.5.c: strict on services/ and libs/, zero ignores outside adapters/
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_return_any = true
+disallow_any_explicit = false
+show_error_codes = true
+mypy_path = "libs"
+files = ["libs", "services", "tests"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "leakage: point-in-time / lookahead guards (R-9.1.a) -- these block merge",
+    "property: Hypothesis invariants (R-12.6.b)",
+    "golden: reproducibility checks (R-8.1.b)",
+    "requires_broker: needs Alpaca paper credentials; skipped without them",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["libs/atlas_core", "services"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+
+# asyncpg ships no py.typed marker. Declared as a config override rather than an
+# inline `# type: ignore` so R-5.5.c's "zero ignores outside adapters" holds.
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
+ignore_missing_imports = true

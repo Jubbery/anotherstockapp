@@ -1,0 +1,30 @@
+# Worker. MASTER_SPEC §4.2.
+#
+# Ingest, training, and backtests are memory-hungry and bursty, and must never
+# compete for CPU with the trading loop -- which is the whole reason this is a
+# separate app rather than a thread in the engine.
+#
+# Scales to zero: nothing here is time-critical to the second, and a nightly job
+# that starts 40s late is fine where a trading loop that stalls 40s is not.
+
+app = "atlas-worker"
+primary_region = "ewr"
+
+[build]
+  dockerfile = "../../ops/docker/worker.Dockerfile"
+
+[env]
+  ALPACA_ENV = "paper"
+  ATLAS_PHASE = "0"
+  ATLAS_SERVICE = "worker"
+
+[processes]
+  worker = "python -m services.worker"
+
+[[vm]]
+  size = "performance-2x"   # LightGBM training and DuckDB scans over Parquet
+  memory = "8gb"
+
+# No http_service: the worker takes no inbound traffic.
+[deploy]
+  strategy = "immediate"

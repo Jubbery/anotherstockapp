@@ -1,0 +1,66 @@
+# Architecture contracts (R-18.6.a). Enforced in CI.
+#
+# These encode §4.3 and §4.4: domain code depends on ports, not vendors; the API
+# cannot place orders; and no MCP client reaches the trading path.
+
+[importlinter]
+root_packages =
+    atlas_core
+    services
+include_external_packages = True
+
+[importlinter:contract:core-is-independent]
+name = atlas_core must not import services (R-4.3.a)
+type = forbidden
+source_modules =
+    atlas_core
+forbidden_modules =
+    services
+
+[importlinter:contract:no-vendor-sdks-in-domain]
+name = Only adapters may import vendor SDKs (R-4.3.a)
+type = forbidden
+source_modules =
+    atlas_core
+    services.engine.risk
+    services.engine.scanner
+    services.engine.ranking
+    services.engine.execution
+forbidden_modules =
+    alpaca
+    alpaca_trade_api
+    twilio
+    resend
+
+[importlinter:contract:no-mcp-in-services]
+name = No MCP client anywhere under services or atlas_core (R-3.8.a, R-19.3.a)
+type = forbidden
+source_modules =
+    atlas_core
+    services
+forbidden_modules =
+    mcp
+    fastmcp
+    mcp_client
+
+[importlinter:contract:api-cannot-place-orders]
+name = The API must not import the engine's execution path (R-4.2.b)
+type = forbidden
+source_modules =
+    services.api
+forbidden_modules =
+    services.engine.execution
+    services.engine.risk
+
+[importlinter:contract:risk-governor-is-pure]
+name = The risk governor imports nothing that does I/O (R-12.1.a)
+type = forbidden
+source_modules =
+    services.engine.risk
+forbidden_modules =
+    asyncpg
+    httpx
+    requests
+    aiohttp
+    logging
+    services.engine.adapters

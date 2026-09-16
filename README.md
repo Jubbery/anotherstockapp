@@ -34,9 +34,37 @@ walk-forward validation · Twilio SMS + Resend email.
 
 ## Status
 
-**Phase 0 — not started.** No implementation code exists yet. The specification is complete and the
-open items in §21 are awaiting the operator's answers; **O-1** (data feed budget) and **O-2** (capital
-and maximum acceptable loss) block Phases 1 and 6 respectively.
+**Phase 0 built; 🔴 GATE 0 not passed.** See
+[`docs/status/phase-0.md`](docs/status/phase-0.md) for the full report.
+
+Three of five acceptance criteria are met: the `ALPACA_ENV` guard and its
+56 subprocess tests, `.env.example`, and the CI/lint/type/architecture
+scaffolding. 106 tests pass, `mypy --strict` is clean, and five import-linter
+contracts hold — each negative-tested against a deliberate violation.
+`audit_log` is proven append-only against a real Postgres 16, including against
+a superuser table owner.
+
+Two criteria need the operator:
+
+- **The Alpaca MCP proof of concept has not run** (R-19.1.a) — no MCP server or
+  paper credentials in the build environment. The 20-step script is written and
+  waiting in [`docs/research/`](docs/research/); it tests six specification
+  assumptions, two of which are load-bearing.
+- **No external fact is primary-source verified** — the fee, feed, and rate-limit
+  values in [`docs/SOURCES.md`](docs/SOURCES.md) are PROVISIONAL and may not be
+  relied on by code that trades real money.
+
+Open items **O-1** (data feed budget) and **O-2** (capital and maximum
+acceptable loss) still block Phases 1 and 6. Every risk limit is a placeholder
+until O-2 is answered.
+
+## Development
+
+```bash
+make install     # uv sync, Python 3.12
+make check       # everything CI runs, except the database job
+make help
+```
 
 ## A word on expectations
 

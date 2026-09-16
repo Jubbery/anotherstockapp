@@ -1,0 +1,23 @@
+# R-16.3.c: the same secret scan runs locally, before the commit exists.
+# CI catching a leaked key is already too late -- the value must be rotated
+# either way, but a local catch means it never left the machine.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.3
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: no-env-file
+        name: refuse to commit a .env file
+        entry: A .env file must never be committed (R-16.3.a)
+        language: fail
+        files: '^\.env$|^\.env\.(?!example)'

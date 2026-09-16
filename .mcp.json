@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Alpaca MCP server. PAPER CREDENTIALS ONLY (R-19.2.a).",
+    "Live credentials here would put live trading behind a natural-language",
+    "interface with no risk governor -- the exact failure the spec is built to",
+    "prevent. Values come from the environment; this file holds no secrets",
+    "(R-19.2.b). R-19.2.c: use a paper account SEPARATE from the one the engine",
+    "trades, so exploratory orders never contaminate the Phase 7 soak record.",
+    "Boundary: the MCP must not be referenced anywhere under services/ (R-19.3.a),",
+    "and bulk historical ingest uses the REST API, not tool calls (R-19.3.b)."
+  ],
+  "mcpServers": {
+    "alpaca": {
+      "command": "uvx",
+      "args": ["alpaca-mcp-server"],
+      "env": {
+        "ALPACA_API_KEY": "${ALPACA_MCP_PAPER_KEY_ID}",
+        "ALPACA_SECRET_KEY": "${ALPACA_MCP_PAPER_SECRET_KEY}",
+        "ALPACA_PAPER_TRADE": "True"
+      }
+    }
+  }
+}

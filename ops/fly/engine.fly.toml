@@ -1,0 +1,58 @@
+# Engine. MASTER_SPEC §4.2.
+#
+# R-4.2.a: EXACTLY ONE instance may hold the trading lease. The hard limits below
+# are belt-and-braces -- the real enforcement is a Postgres advisory lock taken at
+# startup, because a platform setting is a thing someone can change in a hurry at
+# 15:40 and a second engine placing orders against one account is an
+# unbounded-loss failure.
+#
+# Secrets are set with `fly secrets set`, never in this file. Live Alpaca keys
+# exist only on the production engine and api apps (R-3.1.c, §16.3).
+
+app = "atlas-engine"
+primary_region = "ewr"  # close to the exchanges; the broker API is in US-East
+
+[build]
+  dockerfile = "../../ops/docker/engine.Dockerfile"
+
+[env]
+  # R-11.1.a: set explicitly per app. There is no default and no inheritance.
+  ALPACA_ENV = "paper"
+  ATLAS_PHASE = "0"
+  ATLAS_SERVICE = "engine"
+
+[processes]
+  engine = "python -m services.engine"
+
+# R-4.2.c: always on from 08:00 to 16:30 ET on trading days. A cold start in the
+# middle of an open position is not acceptable, so the machine never sleeps.
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+[http_service]
+  internal_port = 8081
+  force_https = true
+  auto_stop_machines = false   # R-4.2.c -- do not change without an ADR
+  auto_start_machines = false
+  min_machines_running = 1
+  max_machines_running = 1     # R-4.2.a
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 1
+    soft_limit = 1
+
+# The engine's own liveness. R-13.2.f layers a dead-man's switch on top of this:
+# if the API sees no heartbeat row for 30s during a session with an active grant,
+# it sets halt state itself. Fly's health check restarts a hung process; the
+# dead-man's switch is what stops it trading in the meantime.
+[[http_service.checks]]
+  interval = "10s"
+  timeout = "2s"
+  grace_period = "30s"
+  method = "GET"
+  path = "/internal/health"
+
+[deploy]
+  strategy = "immediate"   # one machine; there is nothing to roll over
