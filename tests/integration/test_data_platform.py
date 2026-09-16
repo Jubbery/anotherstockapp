@@ -28,8 +28,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 BAR = (
-    "INSERT INTO bars_daily (symbol, session_date, open, high, low, close, volume, data_feed) "
-    "VALUES ('AAPL', $1, $2, $3, $4, $5, $6, 'sip')"
+    "INSERT INTO bars_daily (instrument_id, symbol_as_reported, session_date, "
+    "open, high, low, close, volume, data_feed) "
+    "VALUES (1, 'AAPL', $1, $2, $3, $4, $5, $6, 'sip')"
 )
 
 
@@ -40,7 +41,10 @@ async def db() -> AsyncIterator[asyncpg.Connection]:
     await conn.execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
     for path in MIGRATIONS:
         await conn.execute(path.read_text(encoding="utf-8"))
-    await conn.execute("INSERT INTO symbols (symbol, name) VALUES ('AAPL', 'Apple')")
+    await conn.execute(
+        "INSERT INTO instruments (instrument_id, primary_symbol, name) "
+        "OVERRIDING SYSTEM VALUE VALUES (1, 'AAPL', 'Apple')"
+    )
     try:
         yield conn
     finally:
@@ -96,8 +100,9 @@ async def test_zero_volume_bars_are_allowed(db: asyncpg.Connection) -> None:
 async def test_minute_bars_must_sit_on_the_minute_grid(db: asyncpg.Connection) -> None:
     """R-6.4.g. An unaligned timestamp means the vendor's convention is not ours."""
     minute_insert = (
-        "INSERT INTO bars_minute_hot (symbol, ts, open, high, low, close, volume, data_feed) "
-        "VALUES ('AAPL', $1::timestamptz, 100, 101, 99, 100, 500, 'sip')"
+        "INSERT INTO bars_minute_hot (instrument_id, symbol_as_reported, ts, "
+        "open, high, low, close, volume, data_feed) "
+        "VALUES (1, 'AAPL', $1::timestamptz, 100, 101, 99, 100, 500, 'sip')"
     )
     with pytest.raises(asyncpg.PostgresError, match="bars_minute_hot_aligned"):
         await db.execute(minute_insert, datetime(2026, 9, 16, 14, 31, 30, tzinfo=UTC))
@@ -189,12 +194,16 @@ async def test_a_delisted_symbol_stays_in_its_historical_snapshot(
     db: asyncpg.Connection,
 ) -> None:
     """R-6.4.b / R-6.4.c -- the survivorship guarantee, at the storage layer."""
-    await db.execute("INSERT INTO symbols (symbol, name) VALUES ('SIVB', 'SVB Financial')")
+    await db.execute(
+        "INSERT INTO instruments (instrument_id, primary_symbol, name) "
+        "OVERRIDING SYSTEM VALUE VALUES (2, 'SIVB', 'SVB Financial')"
+    )
     await db.execute(
         "INSERT INTO universe_snapshots "
-        "(as_of, symbol, tradable, shortable, easy_to_borrow, marginable, delisted_at) VALUES "
-        "('2023-06-01', 'SIVB', true, true, true, true, NULL), "
-        "('2024-01-02', 'SIVB', false, false, false, false, '2023-05-01')"
+        "(as_of, instrument_id, symbol, tradable, shortable, easy_to_borrow, marginable, "
+        "delisted_at) VALUES "
+        "('2023-06-01', 2, 'SIVB', true, true, true, true, NULL), "
+        "('2024-01-02', 2, 'SIVB', false, false, false, false, '2023-05-01')"
     )
     rows = await db.fetch(
         "SELECT as_of, tradable, delisted_at FROM universe_snapshots "
@@ -204,20 +213,23 @@ async def test_a_delisted_symbol_stays_in_its_historical_snapshot(
     assert rows[1]["tradable"] is False and rows[1]["delisted_at"] is not None
 
 
-async def test_symbols_are_never_deleted_only_marked(db: asyncpg.Connection) -> None:
-    """A snapshot references symbols, so a delete would have to cascade.
+async def test_instruments_are_never_deleted_only_marked(db: asyncpg.Connection) -> None:
+    """R-6.4.c. A snapshot references the instrument, so a delete must cascade.
 
-    The foreign key makes removing a symbol with history impossible without
+    The foreign key makes removing an instrument with history impossible without
     deliberately destroying that history first, which is the friction we want.
     """
-    await db.execute("INSERT INTO symbols (symbol) VALUES ('SIVB')")
+    await db.execute(
+        "INSERT INTO instruments (instrument_id, primary_symbol) "
+        "OVERRIDING SYSTEM VALUE VALUES (2, 'SIVB')"
+    )
     await db.execute(
         "INSERT INTO universe_snapshots "
-        "(as_of, symbol, tradable, shortable, easy_to_borrow, marginable) "
-        "VALUES ('2023-06-01', 'SIVB', true, true, true, true)"
+        "(as_of, instrument_id, symbol, tradable, shortable, easy_to_borrow, marginable) "
+        "VALUES ('2023-06-01', 2, 'SIVB', true, true, true, true)"
     )
     with pytest.raises(asyncpg.PostgresError, match="violates foreign key"):
-        await db.execute("DELETE FROM symbols WHERE symbol = 'SIVB'")
+        await db.execute("DELETE FROM instruments WHERE instrument_id = 2")
 
 
 # ------------------------------------------------------------------- ingest

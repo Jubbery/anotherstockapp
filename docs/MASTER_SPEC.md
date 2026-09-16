@@ -769,6 +769,38 @@ on Tuesday sees a different past than the same model trained on Monday.
 appeared on that date — i.e. unadjusted for splits occurring after that date. A $200 stock that later
 split 10:1 was not a $20 stock at the time and must not be filtered as one.
 
+#### 6.4.5 Instrument identity
+
+**R-6.4.h** — A ticker MUST NOT be used as a primary key. Every bar, universe
+snapshot, corporate action, and feature row MUST be keyed by a surrogate
+`instrument_id` that is stable across ticker changes and never reused. The
+mapping from ticker to instrument is point-in-time, held in `symbol_mappings`
+with `valid_from` / `valid_until` / `knowledge_at`, and resolved as of a date.
+
+A ticker names a company only for a stretch of time, and both directions of that
+break silently:
+
+| Failure | What it does | Example |
+|---|---|---|
+| **Ticker change** | Splits one company across two keys | FB → META, June 2022. A 60-day window spanning the rename sees two securities with 30 days of history each, and every momentum and volatility feature over them is wrong |
+| **Ticker reuse** | Joins two companies under one key | A delisted ticker returns to the pool and is reassigned. The dead company's prices and the new company's become one series, with a handover discontinuity that reads exactly like a tradeable gap |
+
+The second is the more dangerous: it manufactures an *attractive* feature, which
+is the signature of the bug class §9.1 exists to catch.
+
+**R-6.4.i** — Overlapping mappings for one ticker MUST be refused at write time,
+by a database exclusion constraint rather than by application discipline.
+Resolving an overlap at read time means picking one silently, and a silent pick
+here attaches a whole company's history to the wrong bars.
+
+**R-6.4.j** — Resolution MUST be strict: a ticker that resolves to nothing on a
+date raises, and MUST NOT fall back to the current mapping. Between a delisting
+and a reassignment the honest answer is that nobody was quoting it. The
+convenience fallback is precisely how the reuse bug gets in.
+
+**R-6.4.k** — The vendor's reported ticker SHOULD be retained alongside the
+instrument key (`symbol_as_reported`) as provenance. It is never joined on.
+
 #### 6.4.4 Causality
 
 **R-6.4.f** — Every feature computed on bar series MUST use **causal** windows only — a value at time
@@ -1219,6 +1251,7 @@ and lose money. Each has a mandatory mitigation and, where marked, a test in `te
 | L14 | Ignoring halts and missing bars | Gap-through fills that were impossible. | Halt state in the simulator (§8.4); gap detection at ingest (R-6.5.b). | `test_halted_not_fillable` |
 | L15 | Feature code duplicated between research and live | Train/serve skew: the model sees different inputs in production. | Single shared module + parity test (R-4.4.a, R-4.4.c). | `test_feature_parity` |
 | L16 | One long backtest, one number | Regime luck. 2023–2024 was kind to momentum. | Walk-forward across ≥3 regimes; per-fold and per-year reporting (§9.7 G5). | — |
+| L18 | Keying data by ticker | A rename splits one company in two; a reused ticker joins two companies into one, with a handover gap that looks tradeable. Neither raises | Surrogate `instrument_id` + point-in-time `symbol_mappings` (R-6.4.h) | `test_symbol_mapping_is_as_of` |
 | L17 | Tuning Stage A thresholds on PnL | Turns the filter into an 8,000-name alpha fit and defeats the two-stage split. | Stage A tuned on tradeability only (R-7.4.b). | — |
 
 **R-9.1.a** — `tests/leakage/` MUST be a first-class suite running on every commit, and a failure there
@@ -2798,6 +2831,7 @@ in `docs/decisions/` once resolved. Items marked **blocking** must be answered b
 | **O-11** | **Funding mechanism**: the brief mentions connecting a bank account. Atlas does **not** implement ACH or funds movement — funding and withdrawal happen through Alpaca's own interface. Confirm this is acceptable | Phase 0 | Building a money-movement path would add regulatory surface far beyond this scope. Recommended answer: yes, use Alpaca directly |
 | **O-12** | **Monitoring budget**: Grafana Cloud free tier, or self-hosted on Fly? | Phase 5 | §17.2 |
 | **O-13** | **Time commitment** for the daily authorization step. If the operator cannot reliably do this before 09:30, the design needs revisiting — and the answer is *not* to remove the authorization requirement (R-3.4.c) | Phase 6 | §13.1 |
+| **O-15** | ~~Ticker reuse and renames?~~ **Resolved: surrogate `instrument_id` + point-in-time `symbol_mappings`** (R-6.4.h, migration 0005) | — | Found from the Alpaca MCP tool schema, which exposes an `asof` parameter for historical ticker changes — the vendor treats this as a real hazard too |
 | **O-14** | What is the **stop condition** for the project as a whole — a cumulative loss, a time limit, or a performance threshold, after which Atlas is turned off and the approach reconsidered? | Phase 8 G8 | Deciding this while calm is worth a great deal more than deciding it during a drawdown |
 
 **R-21.a** — An unanswered blocking item MUST NOT be resolved by picking a plausible default and
@@ -2960,25 +2994,34 @@ Indicative DDL. `db/migrations/` is authoritative.
 
 ```sql
 -- ============ Reference ============
-CREATE TABLE symbols (
-  symbol            text PRIMARY KEY,
-  name              text NOT NULL,
-  exchange          text NOT NULL,
-  asset_class       text NOT NULL,
+-- R-6.4.h: a ticker is not an identity. instrument_id is stable across renames
+-- and never reused; `symbol` is resolved through symbol_mappings, as of a date.
+CREATE TABLE instruments (
+  instrument_id     bigserial PRIMARY KEY,
+  primary_symbol    text NOT NULL,           -- display only; NEVER join on this
+  name              text,
+  exchange          text,
+  asset_class       text NOT NULL DEFAULT 'us_equity',
+  security_type     text,
   sector            text,
+  vendor_asset_id   text UNIQUE,             -- the broker's own id, recorded not relied on
   listed_at         date,
-  delisted_at       date,                    -- R-6.4.c: never delete
-  created_at        timestamptz NOT NULL DEFAULT now()
+  delisted_at       date,                    -- R-6.4.c: set, never deleted
+  first_seen_at     timestamptz NOT NULL DEFAULT now(),
+  last_seen_at      timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE universe_snapshots (            -- R-6.4.b
-  as_of             date NOT NULL,
-  symbol            text NOT NULL REFERENCES symbols(symbol),
-  tradable          boolean NOT NULL,
-  shortable         boolean NOT NULL,
-  easy_to_borrow    boolean NOT NULL,
-  marginable        boolean NOT NULL,
-  PRIMARY KEY (as_of, symbol)
+CREATE TABLE symbol_mappings (               -- R-6.4.h / R-6.4.i
+  id                bigserial PRIMARY KEY,
+  symbol            text NOT NULL,
+  instrument_id     bigint NOT NULL REFERENCES instruments(instrument_id),
+  valid_from        date NOT NULL,
+  valid_until       date,                    -- NULL = current
+  knowledge_at      timestamptz NOT NULL,    -- a rename is announced before it takes effect
+  source            text NOT NULL,
+  -- Ambiguity is refused at write time, not resolved at read time (R-6.4.i).
+  EXCLUDE USING gist (symbol WITH =, daterange(valid_from, valid_until, '[)') WITH &&),
+  EXCLUDE USING gist (instrument_id WITH =, daterange(valid_from, valid_until, '[)') WITH &&)
 );
 
 CREATE TABLE corporate_actions (             -- R-6.4.a, R-6.4.d
@@ -3003,7 +3046,8 @@ CREATE TABLE market_calendar (
 
 -- ============ Market data ============
 CREATE TABLE bars_daily (
-  symbol            text NOT NULL,
+  instrument_id     bigint NOT NULL,         -- R-6.4.h, not the ticker
+  symbol_as_reported text NOT NULL,          -- provenance only (R-6.4.k)
   session_date      date NOT NULL,
   open              numeric(20,8) NOT NULL,  -- RAW, unadjusted: R-6.4.d
   high              numeric(20,8) NOT NULL,
@@ -3013,7 +3057,7 @@ CREATE TABLE bars_daily (
   vwap              numeric(20,8),
   trade_count       integer,
   ingested_at       timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (symbol, session_date),
+  PRIMARY KEY (instrument_id, session_date),
   CONSTRAINT bar_sane CHECK (low <= open AND low <= close AND high >= open
                              AND high >= close AND low <= high AND volume >= 0)
 ) PARTITION BY RANGE (session_date);
@@ -3374,6 +3418,7 @@ Rules are defined in their home sections; this is the lookup table.
 | R-6.2.a–c | SIP feed; feed recorded with artifacts; rate limits and circuit breaker |
 | R-6.3.a/b | Bars immutable, corrections versioned; manifests hashed |
 | R-6.4.a–g | Knowledge time; universe snapshots; delistings kept; as-of adjustment; PIT filters; causal windows; bar alignment |
+| R-6.4.h–k | Ticker is not an identity: surrogate key, overlap refused at write time, strict resolution, ticker kept as provenance |
 | R-6.5.a–c | REST for bulk ingest; gap backfill; halt on stream outage |
 | R-6.6.a/b | Contracts at the boundary; bar invariants |
 | R-6.7.a/b | BLOCK stops trading, no override; results surfaced |

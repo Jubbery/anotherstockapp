@@ -56,10 +56,38 @@ async def test_migrations_apply_in_order(db: asyncpg.Connection) -> None:
     assert {"audit_log", "schema_migrations"} <= tables
 
 
-async def test_migrations_are_idempotent(db: asyncpg.Connection) -> None:
-    """Re-running a migration must not fail; a half-applied deploy gets retried."""
-    for path in MIGRATIONS:
-        await db.execute(path.read_text(encoding="utf-8"))
+async def test_each_migration_is_rerunnable_in_place(db: asyncpg.Connection) -> None:
+    """A migration must survive being run twice at its own point in the chain.
+
+    This is the crash-during-deploy case: the runner applied migration N, died
+    before recording it in ``schema_migrations``, and retries. That must be a
+    no-op rather than an error.
+
+    Note what is deliberately *not* asserted: that the whole chain can be
+    replayed from scratch over an already-migrated database. It cannot, and
+    should not be expected to. Migration 0004 builds an index on
+    ``bars_daily.symbol``; 0005 renames that column. Replaying 0004 afterwards
+    fails, because PostgreSQL resolves column names at parse time -- before
+    ``IF NOT EXISTS`` is ever evaluated -- so the guard cannot save it.
+
+    That is not a defect in 0004. A forward-only chain describes a sequence of
+    states, and a later migration is allowed to change what an earlier one built.
+    Never replaying an applied migration is precisely what ``schema_migrations``
+    exists to guarantee.
+    """
+    assert DATABASE_URL is not None
+    for index, target in enumerate(MIGRATIONS):
+        conn: asyncpg.Connection = await asyncpg.connect(DATABASE_URL)
+        try:
+            await conn.execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
+            for path in MIGRATIONS[: index + 1]:
+                await conn.execute(path.read_text(encoding="utf-8"))
+            # The retry.
+            await conn.execute(target.read_text(encoding="utf-8"))
+        except asyncpg.PostgresError as exc:  # pragma: no cover - failure path
+            pytest.fail(f"{target.name} is not re-runnable in place: {exc}")
+        finally:
+            await conn.close()
 
 
 async def test_audit_row_can_be_inserted(db: asyncpg.Connection) -> None:

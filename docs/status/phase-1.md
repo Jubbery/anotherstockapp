@@ -203,6 +203,44 @@ assumes a ticker identifies a company for all time. It does not.
 
 ---
 
+## Resolved since this report was first written
+
+**The ticker-identity hazard is fixed** (migration 0005, R-6.4.h–k). A ticker is
+no longer a primary key anywhere.
+
+- `instruments` carries a surrogate `instrument_id`, stable across renames and
+  never reused. `symbol_mappings` holds the point-in-time ticker → instrument
+  mapping with `valid_from` / `valid_until` / `knowledge_at`.
+- Overlapping mappings are refused by a **GiST exclusion constraint**, not by
+  application discipline — one ticker cannot point at two instruments at once,
+  and one instrument cannot wear two tickers at once. Dual-class shares (GOOG
+  and GOOGL) are separate instruments, so that constraint does not bind on them.
+- Resolution is strict (R-6.4.j): an unresolvable ticker raises rather than
+  falling back to the current mapping. Between a delisting and a reassignment the
+  honest answer is that nobody was quoting it, and the convenience fallback is
+  exactly how the reuse bug gets in. Negative-tested by adding the fallback and
+  watching three leakage tests fail.
+- Ranges are half-open, so on the changeover date the new ticker is live and the
+  old one is not. An inclusive bound would make both resolve that day.
+- Rekeying a *populated* unmigrated bar table is refused with an explanation;
+  re-running 0005 on an already-migrated one is a safe no-op.
+
+Added as leakage row **L18** in §9.1: the reuse case does not raise, and the
+handover discontinuity it creates reads as a tradeable gap.
+
+**A second finding came out of testing it.** `test_migrations_are_idempotent`
+asserted that the whole chain could be replayed over an already-migrated
+database. It cannot: 0004 builds an index on `bars_daily.symbol` and 0005 renames
+that column, and PostgreSQL resolves column names at parse time — before
+`IF NOT EXISTS` is evaluated — so no guard can save it. The test asserted the
+wrong property. It now checks that **each migration is re-runnable at its own
+point in the chain**, which is the crash-during-deploy case that actually
+happens; never replaying an applied migration is what `schema_migrations` is for.
+
+Totals are now **242 tests** (196 without a database), 45 of them leakage.
+
+---
+
 ## Recommendation
 
 1. **Open the egress policy for Alpaca** (`paper-api.alpaca.markets`,
@@ -211,9 +249,6 @@ assumes a ticker identifies a company for all time. It does not.
 2. **Answer O-1** (SIP feed budget). Ingest cannot start without knowing which
    feed it is ingesting — the feed is recorded per row and per artifact (R-6.2.b),
    and mixing them is a promotion blocker.
-3. Decide on the **ticker-reuse** hazard above. My recommendation is a surrogate
-   key on `symbols` plus an `asof` symbol-mapping table, which is a schema change
-   that is cheap now and expensive after 10 years of bars are loaded.
 
-Items 1 and 2 are both operator actions. Until then Phase 1 can go no further
-than it has: everything remaining needs data.
+Both are operator actions. Until then Phase 1 can go no further: everything
+remaining needs data.

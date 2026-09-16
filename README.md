@@ -37,13 +37,13 @@ walk-forward validation · Twilio SMS + Resend email.
 **Phase 0 built (🔴 GATE 0 still open) · Phase 1 in progress.**
 Reports: [`docs/status/`](docs/status/).
 
-213 tests · `mypy --strict` clean · 5/5 import contracts · 4 migrations applied
+242 tests · `mypy --strict` clean · 5/5 import contracts · 5 migrations applied
 and constraint-tested against PostgreSQL 16.
 
 Built so far: the `ALPACA_ENV` guard, the money/price/quantity types, the
-point-in-time adjustment engine, survivorship-safe universe snapshots, the
-market calendar (half-days included), the data platform schema, and the data
-quality gate. Every guard has been negative-tested — a deliberate violation
+point-in-time adjustment engine, survivorship-safe universe snapshots,
+instrument identity (tickers are not primary keys), the market calendar
+(half-days included), the data platform schema, and the data quality gate. Every guard has been negative-tested — a deliberate violation
 introduced, the guard fired, the violation removed.
 
 **No market data has been ingested.** The environment's network egress policy

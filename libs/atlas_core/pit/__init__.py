@@ -14,6 +14,13 @@ from atlas_core.pit.adjustment import (
     adjustment_factors,
     knowable_actions,
 )
+from atlas_core.pit.symbols import (
+    AmbiguousSymbolError,
+    InstrumentId,
+    SymbolMapping,
+    SymbolResolver,
+    UnknownSymbolError,
+)
 from atlas_core.pit.universe import (
     SurvivorshipError,
     UniverseEntry,
@@ -30,4 +37,9 @@ __all__ = [
     "UniverseEntry",
     "UniverseSnapshot",
     "assert_retains_delistings",
+    "AmbiguousSymbolError",
+    "InstrumentId",
+    "SymbolMapping",
+    "SymbolResolver",
+    "UnknownSymbolError",
 ]
