@@ -42,6 +42,21 @@ Build Phase 0, get it green, commit, and stop. Each phase has explicit acceptanc
 most common failure mode for this project is writing an execution engine before a trustworthy backtester
 exists, and then trusting numbers that are wrong.
 
+### The four non-negotiables
+
+Everything else in this document is detail. These four are the spec:
+
+1. **Live trading is Phase 8, behind eight gates.** Paper until then — no exceptions, no "just a small live
+   test to see how it feels." (Section 20)
+2. **Every order passes the risk governor. One code path, no bypass.** Enforced by a CI lint rule, not by
+   discipline. (R-10.1.b)
+3. **The operator can halt everything from a phone in under 10 seconds — and that gets tested weekly,
+   automatically, against the real inbound path.** (R-6.10, R-16.5.a, R-13.7.g)
+4. **Authorization to trade always expires within 24 hours.** There is no permanent authorization and the
+   system must not offer one. (R-6.1)
+
+If a decision you are about to make conflicts with one of these, the decision is wrong.
+
 **Where this document is deliberately opinionated**, Section 4 records the alternatives considered and why
 they were rejected. If you want to change a stack decision, read that first.
 
@@ -55,7 +70,7 @@ A single-tenant, self-hosted investment platform for one person. It:
 2. Scans the US equity market each morning and narrows ~8,000 listed names to **50 tradable candidates**.
 3. Ranks those 50 down to **10** with the best modelled odds of a profitable intraday move.
 4. Trades those names intraday, **only within an explicit, expiring, scoped authorization granted by the
-   operator**, and pushes live notifications via SMS (Twilio) and email.
+   operator**, and pushes live notifications to the operator's phone and inbox.
 5. Lets the operator flatten, halt, and withdraw at any time.
 
 It is **not** a product for other people. See Section 18 — the moment a second person's money enters, this
@@ -185,11 +200,11 @@ and alpha simultaneously from the same objective.
                          │          OPERATOR (one human)          │
                          │   Browser (Next.js)    Phone (SMS)     │
                          └───────┬───────────────────────┬────────┘
-                                 │ HTTPS/SSE             │ Twilio
+                                 │ HTTPS/SSE             │ Telegram
                     ┌────────────▼───────────┐    ┌──────▼─────────┐
-                    │   web  (Vercel)        │    │  Twilio / Resend│
-                    │   Next.js 15 + TS      │    │  (notify out,   │
-                    │   Auth.js + TOTP       │    │   SMS reply in) │
+                    │   web  (Vercel)        │    │ Telegram/Resend │
+                    │   Next.js 15 + TS      │    │ (+ optional SMS)│
+                    │   Supabase Auth + TOTP │    │ out, replies in │
                     └────────────┬───────────┘    └──────▲─────────┘
                                  │ REST + SSE            │
     ═══════════════════════ Fly.io (always-on) ══════════╪═══════════════════
@@ -231,7 +246,7 @@ and alpha simultaneously from the same objective.
 | Process | Lifetime | Responsibility | Restart safety |
 |---|---|---|---|
 | `web` | Serverless | UI only. Holds no trading state. | Trivially restartable |
-| `api` | 24/7, 1 instance | Control plane, auth, SSE, Twilio webhooks. Never places orders directly. | Stateless — restart freely |
+| `api` | 24/7, 1 instance | Control plane, auth, SSE, inbound notification webhooks. Never places orders directly. | Stateless — restart freely |
 | `engine` | 08:00–16:30 ET weekdays, **exactly 1 instance** | The only process permitted to send orders. | MUST rebuild state from broker + DB on boot (Section 10.7) |
 | `worker` | Scheduled | Ingest, scan, rank, train, report. | Idempotent jobs, safe to re-run |
 | `notifier` | 24/7 | Outbound messages. | At-least-once with dedupe keys |
@@ -261,7 +276,7 @@ intent to Redis Streams; `engine` consumes it. This keeps one writer for order s
 | Market data + broker | **Alpaca** — Market Data API (SIP) + Trading API. **Paper and live are the same integration**, one base URL apart | — |
 | Dev/ops copilot | **Alpaca official MCP server** (`alpacahq/alpaca-mcp-server`) — research & ops only, never the hot path (Section 19) | v2.3.1+ |
 | ML | **LightGBM** primary, scikit-learn, Polars, PyArrow; MLflow for the model registry | — |
-| Notifications | **Twilio** (SMS, bidirectional) + **Resend** (email) | — |
+| Notifications | **Telegram Bot API** (primary, free, bidirectional) + **Resend** (email); Twilio SMS optional for `critical` — **no A2P campaign** (Section 13) | — |
 | Auth | **Supabase Auth** (email magic link) + mandatory **TOTP/MFA**, single-email allowlist | — |
 | Observability | OpenTelemetry → **Grafana Cloud** (free tier); Sentry for errors | — |
 | CI | GitHub Actions | — |
@@ -657,12 +672,15 @@ a mode, hard limits, and an expiry. It is the engine's licence to operate.
 Web: an explicit form — mode, notional cap, daily loss cap, expiry, flatten policy — behind a **fresh TOTP
 challenge** even if the session is already authenticated. Re-authentication for money-moving actions.
 
-SMS: the engine may request approval for a specific action by sending a message with a short-lived code.
-The operator replies `YES <code>`. Handled by a Twilio webhook on `api`.
+Messaging: the engine may request approval for a specific action by pushing a prompt to the operator's
+phone. On Telegram (the primary channel) this is an inline **Approve / Reject** button pair bound to one
+`decision_id`; over SMS, if enabled, it is a reply of `YES <code>`. Both are handled by webhooks on `api`.
+See Section 13.6 for the channel design and its security rules.
 
 - **R-6.7** SMS approval codes MUST be single-use, MUST expire in **10 minutes**, and MUST be bound to a
   specific `decision_id`. A generic "YES" MUST NOT authorize anything.
-- **R-6.8** The Twilio webhook MUST validate the `X-Twilio-Signature` header against the auth token on every
+- **R-6.8** Inbound webhooks MUST be authenticated — Telegram via its secret-token header, Twilio via the
+  `X-Twilio-Signature` header validated against the auth token — on every
   request. An unsigned or mis-signed request MUST be rejected with 403. Without this, anyone who learns the
   webhook URL can approve trades. This is the single most security-critical endpoint in the system.
 - **R-6.9** SMS MUST NOT be able to *grant* a new authorization or *raise* a limit. It may only approve a
@@ -672,7 +690,8 @@ The operator replies `YES <code>`. Handled by a Twilio webhook on `api`.
 ### 6.4 The kill switch
 
 - **R-6.10** The operator MUST be able to halt everything from a phone in **under 10 seconds**. Texting
-  `STOP` to the Twilio number MUST immediately revoke all active authorizations and trigger the flatten
+  `/halt` to the Telegram bot (or `STOP` to the SMS number, if enabled) MUST immediately revoke all active
+  authorizations and trigger the flatten
   policy. `STOP` MUST NOT require a code — the failure mode of an unwanted halt is trivial; the failure mode
   of a halt that did not work is not.
 - **R-6.11** The web UI MUST show a persistent, always-visible **HALT** control on every page.
@@ -1236,52 +1255,112 @@ not buried in an analytics tab.
 
 ## 13. Notifications
 
-### 13.1 Channels
+**No A2P campaign, no carrier registration, no multi-day lead time.** This is a one-operator system sending
+messages to one person, so it does not need the machinery built for businesses messaging strangers.
 
-- **SMS via Twilio** — time-critical and interactive (approvals, halts, critical alerts).
-- **Email via Resend** — summaries, daily reports, non-urgent notices.
+### 13.1 Why not a Twilio 10DLC campaign
 
-### 13.2 A2P 10DLC registration — start this on day one 🔴
+Worth recording, because the obvious path is a trap:
 
-US A2P SMS requires 10DLC registration through The Campaign Registry. An individual without a Tax ID
-registers as a **Sole Proprietor** brand with a sole-proprietor campaign. Brand approval is typically
-minutes; **campaign approval takes several days**, generally under a week end to end.
+- **Twilio trial accounts cannot register for A2P 10DLC at all** — that requires a paid account.
+- Campaign review currently runs **10–15 days**.
+- The entire regime exists to police businesses messaging consumers who did not ask for it. You are messaging
+  yourself.
 
-**R-13.2.a** Begin registration in **Phase 0**. It is the only dependency in this project with a multi-day
-external lead time, and discovering it in Phase 6 stalls the build.
-**R-13.2.b** Sole-proprietor campaigns carry low throughput limits and a daily message cap. The notification
-design MUST respect this — see the throttling rules below. Do not design a chatty system.
+So the system is built channel-agnostic, with the free, zero-registration channels as the primary path.
 
-### 13.3 Event catalogue
+### 13.2 Channels
 
-| Event | Severity | SMS | Email |
-|---|---|---|---|
-| Morning plan ready (the 10) | info | ✓ (summary) | ✓ (full, with reasoning) |
-| Approval requested | info | ✓ | — |
-| Trade entered | info | batched | ✓ |
-| Trade exited | info | batched | ✓ |
-| Daily loss limit hit | critical | ✓ | ✓ |
-| Circuit breaker tripped | critical | ✓ | ✓ |
-| Reconciliation mismatch | critical | ✓ | ✓ |
-| Engine down during market hours | critical | ✓ | ✓ |
-| Positions open after 15:58 | critical | ✓ | ✓ |
-| Model drift / demotion | warn | ✓ | ✓ |
-| Daily summary | info | — | ✓ |
-| Weekly performance report | info | — | ✓ |
+| Priority | Channel | Cost | Registration | Role |
+|---|---|---|---|---|
+| **1** | **Telegram Bot API** | Free, unlimited | None — create a bot in 60 seconds | **Primary.** All alerts, and all interactive approve/halt actions |
+| **2** | **Resend email** | Free tier: 3,000/mo, **100/day**, one verified domain | Domain DNS records | Digests, daily/weekly reports, redundant copy of every `critical` |
+| **3** | **Twilio SMS** *(optional)* | Free trial credit | **Verified caller ID only — no campaign** | Optional redundant path for `critical` only |
 
-### 13.4 Rules
+**Why Telegram is primary and not a fallback:** it is free and unmetered, delivers in under a second, and —
+unlike SMS — supports **inline buttons**. An approval prompt becomes two tappable buttons rather than a
+six-character code typed back correctly under time pressure. For the approval flows in Section 6 that is a
+material safety improvement, not a convenience.
 
-- **R-13.4.a** Every notification MUST carry a `dedupe_key`; the notifier MUST NOT send twice for the same
-  key. Delivery is at-least-once; the dedupe key makes it effectively once.
-- **R-13.4.b** Non-critical SMS MUST be batched — at most one every 15 minutes, aggregating events.
-- **R-13.4.c** `critical` MUST bypass batching and quiet hours. Nothing suppresses a critical alert.
-- **R-13.4.d** SMS bodies MUST be ≤ 160 chars and MUST NOT contain account numbers or full balances.
-  Phones get lost and SMS is not a confidential channel.
-- **R-13.4.e** A send failure MUST be retried (3×, exponential backoff) and then logged as `failed` and
-  escalated to email. A critical alert that silently failed to send is a critical alert that did not happen.
-- **R-13.4.f** Quiet hours (default 21:00–07:00 ET) suppress `info` only.
+- **R-13.2.a** Notifications MUST go through a `NotificationPort` protocol with one adapter per channel. No
+  channel may be referenced directly outside its adapter. Adding, removing, or swapping a channel is then a
+  config change, which matters because this is the part of the stack most likely to change.
+- **R-13.2.b** The system MUST function fully with **only** Telegram and email configured. Twilio MUST be
+  optional and its absence MUST NOT degrade any safety property.
 
----
+### 13.3 Twilio, if used
+
+Only if the operator wants true SMS as a redundant critical path.
+
+- **R-13.3.a** Use a **trial account with the operator's own number added as a Verified Caller ID.** Trial
+  accounts can send to verified numbers without any campaign. Messages carry a trial prefix; that is fine.
+- **R-13.3.b** Do **not** register an A2P 10DLC campaign. If trial credit is ever exhausted, the decision is
+  "upgrade to a paid account" or "drop SMS" — it is never a blocker, because of R-13.2.b.
+- **R-13.3.c** Twilio MUST carry **`critical` severity only**. This keeps volume at a handful of messages a
+  month and inside any free allowance.
+
+### 13.4 Respecting the free tiers
+
+The email free tier caps at **100/day**, and 3,000/month averages to exactly that — the daily limit is a real
+ceiling, not slack.
+
+- **R-13.4.a** Email MUST NOT be sent per-trade. Trades are accumulated and sent as **one end-of-day digest**.
+  A ten-name day with several round trips each would otherwise burn a third of the daily allowance on
+  information nobody reads in real time.
+- **R-13.4.b** The notifier MUST track its own daily send count per channel and MUST log and alert when it
+  reaches **80%** of a known limit.
+- **R-13.4.c** If an email quota is exhausted, `critical` events MUST still go out via Telegram (and SMS if
+  configured). **A quota MUST NEVER be able to suppress a critical alert** — reserve headroom by design:
+  `info` email is budgeted at ≤ 20/day, leaving 80 in reserve.
+
+### 13.5 Event catalogue
+
+| Event | Severity | Telegram | Email | SMS (if on) |
+|---|---|---|---|---|
+| Morning plan ready (the 10) | info | ✓ with Approve/Reject buttons | ✓ full reasoning | — |
+| Approval requested (manual mode) | info | ✓ with buttons | — | — |
+| Trade entered / exited | info | batched, 15-min | in EOD digest (R-13.4.a) | — |
+| Daily loss limit hit | critical | ✓ | ✓ | ✓ |
+| Circuit breaker tripped | critical | ✓ | ✓ | ✓ |
+| Reconciliation mismatch | critical | ✓ | ✓ | ✓ |
+| Engine down during market hours | critical | ✓ | ✓ | ✓ |
+| Positions open after 15:58 | critical | ✓ | ✓ | ✓ |
+| Model drift / auto-demotion | warn | ✓ | ✓ | — |
+| Daily summary + trade digest | info | ✓ short | ✓ full | — |
+| Weekly performance report | info | — | ✓ | — |
+
+### 13.6 Inbound: approvals and the kill switch
+
+The Telegram bot is the interactive channel. Commands: `/halt`, `/status`, `/positions`, `/flatten`,
+plus inline callback buttons on approval prompts.
+
+**Security — this endpoint can move money, so treat it accordingly:**
+
+- **R-13.6.a** The Telegram webhook MUST be registered with a **secret token**, and every inbound request MUST
+  be validated against the `X-Telegram-Bot-Api-Secret-Token` header. Mismatch → 403, no processing.
+- **R-13.6.b** The handler MUST enforce a **single allowlisted `chat_id`**. Anyone who learns your bot's
+  username can message it; only one chat may command it. Every other chat is silently ignored and logged.
+- **R-13.6.c** Approval callbacks MUST be bound to a specific `decision_id`, single-use, and expire in **10
+  minutes** (as R-6.7). A stale button tap MUST do nothing.
+- **R-13.6.d** If Twilio SMS is enabled, its webhook MUST validate `X-Twilio-Signature` (R-6.8) and enforce a
+  single allowlisted sender number.
+- **R-13.6.e** Inbound channels MUST NOT be able to grant authorization or raise a limit (R-6.9). They may
+  approve a specific pending action, or halt. **Halting is always allowed, from any allowlisted channel,
+  with no code and no confirmation** (R-6.10).
+
+### 13.7 General rules
+
+- **R-13.7.a** Every notification MUST carry a `dedupe_key`; the notifier MUST NOT send twice for the same
+  key. Delivery is at-least-once; the key makes it effectively once.
+- **R-13.7.b** Non-critical alerts MUST be batched — at most one every 15 minutes, aggregating events.
+- **R-13.7.c** `critical` MUST bypass batching, quiet hours, and every quota consideration.
+- **R-13.7.d** Message bodies MUST NOT contain account numbers or full balances. Phones get lost and none of
+  these channels is a confidential medium.
+- **R-13.7.e** A send failure MUST be retried (3×, exponential backoff), then logged `failed` and escalated to
+  the next channel. A critical alert that silently failed to send is a critical alert that did not happen.
+- **R-13.7.f** Quiet hours (default 21:00–07:00 ET) suppress `info` only.
+- **R-13.7.g** The weekly kill-switch drill (R-16.5.a) MUST exercise the **real** inbound path end to end,
+  not a mocked one. A kill switch tested only against a mock is untested.
 
 ## 14. Frontend and API surface
 
@@ -1344,7 +1423,8 @@ GET    /backtests   GET /backtests/{id}   POST /backtests    (enqueue)
 GET    /funding/summary                balances + safe-to-withdraw calc
 GET    /audit                          paginated, filterable
 
-POST   /webhooks/twilio                inbound SMS  [X-Twilio-Signature required — R-6.8]
+POST   /webhooks/telegram              inbound commands + approval callbacks  [secret token — R-13.6.a]
+POST   /webhooks/twilio                inbound SMS, optional   [X-Twilio-Signature — R-6.8]
 ```
 
 - **R-14.3.a** Revoke and halt MUST NOT require TOTP. Every second of friction on a kill switch is a second
@@ -1363,7 +1443,8 @@ POST   /webhooks/twilio                inbound SMS  [X-Twilio-Signature required
   `.env.example` with real values. Add a `gitleaks` pre-commit hook and a CI secret scan.
 - **R-15.1.b** Single-user allowlist: exactly one email address may authenticate. Everything else is a 403.
 - **R-15.1.c** TOTP MFA is mandatory, not optional.
-- **R-15.1.d** The `api` service MUST only accept requests from the Vercel deployment origin and the Twilio
+- **R-15.1.d** The `api` service MUST only accept requests from the Vercel deployment origin and the
+  notification providers'
   webhook IP ranges. Everything else rejected at the edge.
 - **R-15.1.e** Live trading credentials MUST be rotated if they ever appear in a log, a terminal, or a
   screenshot. Assume compromise; rotation is cheap.
@@ -1543,21 +1624,40 @@ The operator asked that Claude-side tooling be used for market data work. Three 
 each has a genuinely different role. **None of them is in the production hot path** — that distinction is
 the most important thing in this section.
 
-### 19.1 Alpaca official MCP server — the development and operations copilot ⭐
+### 19.1 Alpaca official MCP server — proof of concept and research ⭐
 
-`alpacahq/alpaca-mcp-server` — Alpaca's **official** MCP server, rewritten for v2 on FastMCP + OpenAPI
-(v2.3.1, September 2026), exposing **65 tools** across the Trading and Market Data APIs. It works with Claude
-Code, Claude Desktop, Cursor, and VS Code with no init step.
+[`alpacahq/alpaca-mcp-server`](https://github.com/alpacahq/alpaca-mcp-server) — Alpaca's **official** MCP
+server, rewritten for v2 on FastMCP + OpenAPI (v2.3.1, September 2026), exposing **65 tools** across the
+Trading and Market Data APIs. Works with Claude Code, Claude Desktop, Cursor, and VS Code with no init step.
 
-**Use it for:** exploring the data during development; sanity-checking a scanner result by hand; inspecting
-paper positions and orders conversationally during a debugging session; ad-hoc "what did this symbol do at
-10:15" questions; verifying that an API response shape matches your client's model.
+This is the fastest route from zero to a working proof of concept, and it should be used heavily in
+Phases 0–4. It collapses the usual "write a client, discover the response shape is different, rewrite the
+client" loop into a conversation.
 
-**Do NOT use it for:** anything inside `services/`. The engine MUST call the Alpaca REST/WebSocket APIs
-directly through `BrokerPort` (R-11.4.a). The reasons are not stylistic:
+**Use it for — this is a first-class part of the build, not a toy:**
 
-- The engine's correctness depends on deterministic, idempotent, latency-bounded calls with
-  `client_order_id` guards (R-10.5.a). An LLM-mediated tool call satisfies none of those properties.
+| Phase | What the MCP is for |
+|---|---|
+| **0 — POC** | Prove the whole idea end to end before committing to architecture: pull quotes, place a paper bracket order, watch it fill, inspect the position. One session, no code |
+| **1 — Data** | Validate the shape and quality of Alpaca's bars before writing the ingest pipeline. Spot-check corporate actions and halts. Confirm what SIP returns that IEX does not (R-2.4.b) |
+| **3 — Scanner** | Sanity-check Stage A output by hand. "Show me today's volume and spread for these 50" is a one-line question and a strong correctness check on the scanner |
+| **4 — Modelling** | Prototype feature ideas conversationally before implementing them. Investigate what the model got wrong on a specific symbol and day. Interrogate outliers in the training set |
+| **5–8 — Ops** | Inspect paper positions and orders while debugging. Answer "what did this symbol actually do at 10:15" without writing a script |
+
+**On "model training" specifically — one boundary that matters.** Use the MCP to *design and validate* the
+training data; do not use it to *move* the training data. The corpus is roughly 786M bars/year, and tool
+calls are LLM-mediated, rate-limited, non-deterministic, and pass through a context window. Bulk historical
+ingest MUST use the Alpaca REST API from `worker` (Section 11.2, Phase 1).
+
+This is not a compromise on data quality: **it is the same Alpaca data over both paths**, so what you
+validate interactively through the MCP is exactly what the pipeline ingests. That consistency is precisely
+why the MCP is trustworthy for this job.
+
+**Never in the order path.** The engine MUST call Alpaca directly through `BrokerPort` (R-11.4.a). The
+reasons are not stylistic:
+
+- Engine correctness depends on deterministic, idempotent, latency-bounded calls with `client_order_id`
+  guards (R-10.5.a). An LLM-mediated tool call satisfies none of those properties.
 - Every order must pass the risk governor (R-10.1.b). An MCP call bypasses it entirely.
 - Non-determinism in an order path is unacceptable at any latency.
 
@@ -1565,9 +1665,11 @@ directly through `BrokerPort` (R-11.4.a). The reasons are not stylistic:
 
 - **R-19.1.a** The MCP server MUST be configured with `ALPACA_PAPER_TRADE=true` and **paper keys only**.
   Live keys MUST NOT be placed in any MCP configuration, ever (R-11.1.b). A conversational interface with
-  live order-placement authority is precisely the thing Section 6 exists to prevent.
-- **R-19.1.b** Its config belongs in `.mcp.json` with env-var references, never literal keys, and that file's
-  secrets MUST be gitignored.
+  live order-placement authority is exactly what Section 6 exists to prevent.
+- **R-19.1.b** Config belongs in `.mcp.json` with env-var references, never literal keys; secrets gitignored.
+- **R-19.1.c** Any finding from an MCP session that informs a design decision MUST be written down — in an
+  ADR, a docstring, or a test. Conversations are not a durable artifact, and "we checked that once in chat"
+  is not a record.
 
 Suggested project config:
 
@@ -1650,10 +1752,16 @@ build the exciting parts early; the ordering here is deliberate, and its central
 
 ### Phase 0 — Foundations (week 1)
 Repo scaffolding, Docker, CI, Supabase project + Alembic migrations, Fly.io app, Next.js skeleton, auth with
-TOTP, health endpoints, telemetry, secret management. **Start Twilio A2P 10DLC registration (R-13.2.a).**
-Open an Alpaca account, generate paper keys, configure the Alpaca MCP (19.1).
+TOTP, health endpoints, telemetry, secret management. Create the Telegram bot and verify the allowlisted
+chat ID. Open an Alpaca account, generate paper keys, configure the Alpaca MCP (19.1).
+
+**Then do the proof of concept through the MCP before writing engine code**: pull a quote, place a paper
+bracket order, watch it fill, inspect the position, close it. One conversation. It proves the account, keys,
+permissions, and order semantics all work, and it surfaces Alpaca's actual response shapes before any of them
+are baked into a client. Record what you learn per R-19.1.c.
+
 🔴 **Gate 0:** CI green; `/health` reachable from the deployed frontend; operator can log in with TOTP;
-`.mcp.json` works against paper.
+`.mcp.json` works against paper; a round-trip paper trade has been placed and closed through the MCP.
 
 ### Phase 1 — Data spine (weeks 2–3)
 Alpaca market data client (REST + WS), symbol/calendar sync, nightly bar ingest to Postgres + Parquet with
@@ -1687,10 +1795,11 @@ bracket orders, idempotency, trade-update stream, crash recovery, EOD flatten.
 positions open past 15:58. Chaos suite passes. Kill-switch drill passes.
 
 ### Phase 6 — Notifications and authorization (week 15)
-Twilio + Resend, event catalogue, dedupe/throttle, inbound SMS webhook with signature validation, the
-authorization object, kill switch, approval flows.
+`NotificationPort` with Telegram + Resend adapters (Twilio optional), event catalogue, dedupe/throttle/quota
+tracking, inbound webhook with secret-token and chat-ID allowlist validation, the authorization object, kill
+switch, approval flows with inline buttons.
 🔴 **Gate 6:** `STOP` from a phone halts and flattens paper trading in under 10 seconds, verified three
-times. Twilio signature validation rejects a forged request.
+times. A forged webhook request — wrong secret token, or a non-allowlisted chat ID — is rejected.
 
 ### Phase 7 — Frontend and shadow mode (weeks 16–18)
 All screens, SSE, charts, journal, performance analytics with cost drag and the buy-and-hold comparison.
@@ -1720,7 +1829,7 @@ Do not guess at these — ask, and record the answers here.
 | **O-3** | Options in scope? | The brief says "day trade stock options," which is ambiguous. **This spec assumes equities only.** Options add enormous complexity — Greeks, assignment, OPRA data, spreads. Recommend deferring to v2. **Confirm the reading** |
 | **O-4** | Acceptable max drawdown before shutting down entirely? | This should be decided calmly now, not during a drawdown |
 | **O-5** | Authorization mode for Phase 8 — `manual` or `semi`? | Recommendation: `manual` for the first two weeks live |
-| **O-6** | Monthly budget ceiling? | Baseline ≈ $99 Alpaca data + $25 Supabase + ~$25 Fly + ~$15 Twilio/Resend ≈ **$165/mo** before any trading P&L. The strategy must clear this before it earns anything |
+| **O-6** | Monthly budget ceiling? | Baseline ≈ $99 Alpaca SIP data + $25 Supabase + ~$25 Fly = **~$150/mo** before any trading P&L. Notifications are $0 (Section 13). The strategy must clear this before it earns anything |
 | **O-7** | Does the operator have (or qualify for) a BlackRock Advisor Center account? | Determines whether Section 19.2 is usable. The system MUST NOT depend on it either way (R-19.2.a) |
 | **O-8** | Tax situation — is §475(f) mark-to-market worth exploring? | Deadline-bound; needs a CPA (R-18.d) |
 
@@ -1781,9 +1890,11 @@ Start here. Do not skip ahead.
    Dockerfiles, `fly.toml`, GH Actions workflow.
 5. Stand up Supabase; write the Alembic migration for Section 5's schema, including the append-only trigger
    on `audit_log` (R-5.b).
-6. Start Twilio A2P 10DLC registration (R-13.2.a). It has the longest lead time of anything here.
+6. Create the Telegram bot via BotFather, capture the token and your `chat_id`, and set the webhook secret.
+   No carrier registration, no campaign, no waiting (Section 13.1).
 7. Open an Alpaca account; generate **paper** keys; configure `.mcp.json` per 19.1.
-8. Get CI green. Commit. **Stop at Gate 0** and report status.
+8. Run the MCP proof of concept (Phase 0): paper bracket order placed, filled, inspected, closed.
+9. Get CI green. Commit. **Stop at Gate 0** and report status.
 
 **A note on sequencing, for whoever builds this:** the temptation will be to write the trading engine early —
 it is the interesting part. Do not. The engine is worthless without a trustworthy backtester, and a

@@ -20,7 +20,7 @@ the three-stage scanning pipeline, the ML methodology, risk controls, and a gate
 | **Database** | Supabase Postgres + Storage (Neon documented as a drop-in fallback) |
 | **Broker & data** | Alpaca — paper and live, one base URL apart |
 | **ML** | LightGBM, triple-barrier labelling, purged walk-forward validation |
-| **Notifications** | Twilio SMS + Resend email |
+| **Notifications** | Telegram (free, primary) + Resend email; Twilio SMS optional |
 
 ### Before you write any code
 
@@ -31,8 +31,16 @@ build if you discover them late:
    this, they are enforced in code, and there is no override.
 2. **The PDT rule was retired in June 2026** (§2.2). Do not write a $25k gate; do not treat its absence as
    safety.
-3. **Investopedia's simulator has no official API** (§2.3), so the testing venue is Alpaca paper trading
-   plus an in-house event-driven backtester.
+3. **No Twilio A2P campaign is needed** (§13.1) — trial accounts can't register for one anyway, and
+   reviews run 10–15 days. Telegram is the primary channel: free, instant, and it supports inline
+   approve/reject buttons, which beats typing a code back under time pressure.
+
+### The proof of concept comes first
+
+Before any engine code, run the Phase 0 proof of concept through the
+[Alpaca MCP server](https://github.com/alpacahq/alpaca-mcp-server) (paper keys only): pull a quote, place a
+bracket order, watch it fill, close it. One conversation, no code. It validates the account, keys, and order
+semantics and surfaces Alpaca's real response shapes before they get baked into a client.
 
 ### Non-negotiables
 

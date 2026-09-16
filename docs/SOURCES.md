@@ -64,13 +64,22 @@ No official API. Community scrapers only, credential-based, variously stale:
 - [Neon Postgres extensions](https://neon.com/docs/extensions/pg-extensions)
 - [PostgreSQL hosting pricing comparison 2026](https://www.bytebase.com/blog/postgres-hosting-options-pricing-comparison/) — TigerData (Timescale, renamed June 2025) free tier 750MB
 
-## Twilio A2P 10DLC (spec §13.2)
+## Notifications (spec §13)
 
-- [A2P 10DLC registration quickstart](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/quickstart)
-- [Direct Sole Proprietor registration overview](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/direct-sole-proprietor-registration-overview)
-- [Who can register for A2P 10DLC](https://support.twilio.com/hc/en-us/articles/4402971752347-Who-Can-Currently-Register-for-A2P-10DLC-in-the-United-States)
+**Twilio A2P 10DLC — why the spec avoids it:**
 
-Brand approval minutes; **campaign approval several days**; under a week end to end.
+- [Twilio free trial account guide](https://www.twilio.com/docs/usage/tutorials/how-to-use-your-free-trial-account) — **trial accounts cannot register for A2P 10DLC**; that requires a paid account. Trial accounts send to Verified Caller IDs; a verified toll-free number can message up to 5 pre-designated numbers
+- [A2P 10DLC registration quickstart](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/quickstart) · [campaign approval requirements](https://help.twilio.com/articles/11847054539547-A2P-10DLC-Campaign-Approval-Requirements) — **campaign review currently runs 10–15 days**
+
+A campaign is not needed here: one operator messaging their own verified number. §13 therefore makes
+Telegram the primary channel and Twilio optional.
+
+**Resend free tier:** 3,000 emails/month, **100/day**, one verified domain, 30-day log retention —
+[Resend pricing 2026](https://nuntly.com/resend-pricing) · [free tier explained](https://automationatlas.io/answers/resend-free-tier-explained-2026/).
+The daily cap is the binding constraint, hence R-13.4.a (EOD digest, not per-trade email).
+
+**Telegram Bot API:** free and unmetered, inline keyboards for approve/reject, webhook secret-token header
+(`X-Telegram-Bot-Api-Secret-Token`) for authentication — [Bot API docs](https://core.telegram.org/bots/api).
 
 ## Other market data providers considered (spec §19.3)
 

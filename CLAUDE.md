@@ -28,13 +28,19 @@ Treat these with more care than ordinary application code. A bug here costs real
 | Live credentials | Production `engine`/`api` only. Never in CI, `.env.example`, local dev, or MCP config |
 | Feature code | Imported by both training and live paths, never duplicated (R-4.4.a) |
 | `audit_log` | Append-only. Enforced by trigger |
+| Inbound webhooks | Telegram secret token + single allowlisted `chat_id`; Twilio signature if enabled (§13.6) |
 
 ## Tooling
 
-The Alpaca MCP server (`.mcp.json`) is configured with **paper keys only** and is for interactive research
-and debugging. It MUST NOT appear anywhere in `services/` — the engine calls Alpaca directly through
-`BrokerPort` so that order paths stay deterministic, idempotent, and risk-checked. Same applies to every
-other MCP server and connector (R-19.3.a).
+The Alpaca MCP server (`.mcp.json`, **paper keys only**) is a first-class part of Phases 0–4: run the
+proof of concept through it before writing engine code, validate bar data before building the ingest
+pipeline, sanity-check scanner output, and investigate what the model got wrong. Write down anything you
+learn that informs a decision (R-19.1.c) — a chat is not a durable artifact.
+
+Two boundaries: **bulk historical ingest uses the REST API**, not tool calls (same Alpaca data either way),
+and the MCP MUST NOT appear anywhere in `services/` — the engine calls Alpaca through `BrokerPort` so order
+paths stay deterministic, idempotent, and risk-checked. Same applies to every other MCP server and
+connector (R-19.3.a).
 
 ## Conventions
 
