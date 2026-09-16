@@ -2,19 +2,25 @@
 
 ## Read the spec first
 
-[`docs/MASTER_SPEC.md`](docs/MASTER_SPEC.md) is the source of truth for this repository. Read Sections 1–4
-and Appendix B before writing code. It uses MUST / SHOULD / MAY, numbered rules (`R-x.y.z`), and 🔴 HARD
-GATES between build phases.
+[`docs/MASTER_SPEC.md`](docs/MASTER_SPEC.md) is the source of truth for this repository. Read **Appendix B**
+(domain primer — skip only if you have traded professionally), then **Sections 1–4**, then **§20** before
+writing code. It uses MUST / SHOULD / MAY, numbered rules (`R-x.y.z`), and 🔴 HARD GATES between build
+phases.
 
 ## Working agreements
 
-- **Build the phases in order** (spec §20). Each has acceptance criteria. Stop at the gate and report status
-  rather than running ahead. The engine is the interesting part and it is deliberately Phase 5 — it is
-  worthless without a trustworthy backtester, which is worthless without clean point-in-time data.
-- **Do not weaken a rule to make progress.** If a `MUST` blocks you, that is information. Raise it.
+- **Build the phases in order** (spec §20). Each has acceptance criteria. Stop at the gate, write
+  `docs/status/phase-N.md`, and report status rather than running ahead. The engine is the interesting
+  part and it is deliberately Phase 5 — it is worthless without a trustworthy backtester, which is
+  worthless without clean point-in-time data.
+- **Do not weaken a rule to make progress** (R-0.5.a). If a `MUST` blocks you, that is information.
+  Raise it.
 - **Deviations get an ADR** in `docs/decisions/`, numbered, explaining what changed and why.
-- Answer the open items in §21 with the operator rather than guessing — especially **O-3** (equities vs
-  options), which changes scope substantially.
+- Answer the open items in §21 with the operator rather than guessing (R-21.a) — especially **O-1**
+  (SIP data feed budget) and **O-2** (capital and maximum acceptable loss), which every risk limit
+  depends on.
+- Cite the rule ID in a comment wherever you enforce one. A grep for `R-12.2.x` must find both the
+  rule and its enforcement.
 
 ## Safety-critical areas
 
@@ -22,12 +28,15 @@ Treat these with more care than ordinary application code. A bug here costs real
 
 | Area | Rule |
 |---|---|
-| `services/engine/risk/` | 100% branch coverage. Pure functions. No exceptions |
+| `services/engine/risk/` | 100% branch coverage, zero surviving mutants. Pure functions. No exceptions (R-12.6) |
 | Order submission | Exactly one path, through the risk governor (R-10.1.b). Never call the broker elsewhere |
 | `ALPACA_ENV` | Explicit, no default. Missing value crashes at startup (R-11.1.a) |
-| Live credentials | Production `engine`/`api` only. Never in CI, `.env.example`, local dev, or MCP config |
+| Live credentials | Production `engine`/`api` only. Never in CI, `.env.example`, local dev, or MCP config (R-16.3.a) |
 | Feature code | Imported by both training and live paths, never duplicated (R-4.4.a) |
-| `audit_log` | Append-only. Enforced by trigger |
+| Kill switch | Three independent paths, 10s p99, weekly drill. Simplest code in the repo (R-13.2) |
+| Authorization | Expires within 24h, never auto-renews, scoped to an explicit symbol list (R-3.4) |
+| `audit_log` | Append-only. Enforced by trigger. Written in the same transaction as the change (R-3.7) |
+| `tests/leakage/` | Blocks merge. These catch bugs that make results look *better* (R-9.1.a) |
 | Inbound webhooks | Telegram secret token + single allowlisted `chat_id`; Twilio signature if enabled (§13.6) |
 
 ## Tooling
@@ -44,8 +53,9 @@ connector (R-19.3.a).
 
 ## Conventions
 
-- Python: `ruff`, `mypy --strict` on `services/`, `pytest`. Money is `Decimal`, never `float`.
+- Python: `ruff`, `mypy --strict` on `services/` and `libs/`, `pytest`. Money is `Decimal`, never `float`.
 - Timestamps: timezone-aware UTC in storage; `America/New_York` only at display, always labelled.
+- Session boundaries come from the exchange calendar, never hardcoded — half-days exist (R-5.4.c).
 - TypeScript: `strict: true`. The API client in `web/lib/api/` is generated from OpenAPI — do not hand-write it.
 - Every write that changes money, position, or authorization state goes in a transaction that also writes
   an `audit_log` row.

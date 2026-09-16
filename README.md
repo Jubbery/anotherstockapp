@@ -1,50 +1,47 @@
-# anotherstockapp
+# Atlas
 
-A single-tenant, personal algorithmic day-trading platform. Scans the US equity market each morning,
-narrows ~8,000 names to 50 to 10, and trades them intraday under an explicit, expiring, operator-granted
-authorization — with live SMS/email notifications and a hard kill switch.
+A single-tenant algorithmic day-trading platform for one operator.
 
-**Nothing is built yet.** This repository currently contains the specification.
+Atlas scans the liquid US equity market each morning, narrows ~8,000 symbols to 50 by deterministic
+rules and to 10 by a learned ranker, trades them intraday under an authorization that expires within
+24 hours, and can be halted from a phone in under ten seconds.
 
-## 👉 Start here: [`docs/MASTER_SPEC.md`](docs/MASTER_SPEC.md)
+```
+ ~8,000 symbols ──[ Stage A: rules ]──► 50 ──[ Stage B: LightGBM ]──► 10
+                                                                       │
+                                        [ Stage C: meta-label gate ]───┤
+                                                                       ▼
+                                      [ risk governor ]──► one order path ──► Alpaca
+```
 
-That document is the complete handoff: architecture, stack decisions and their rationale, database schema,
-the three-stage scanning pipeline, the ML methodology, risk controls, and a gated eight-phase build plan.
+## Start here
 
-### The shape of it
+**[`docs/MASTER_SPEC.md`](docs/MASTER_SPEC.md)** is the source of truth. Read Appendix B (domain primer),
+then §1–§4, then §20 (the phase plan). Everything else is reference.
 
-| | |
-|---|---|
-| **Frontend** | Next.js 15 + TypeScript on Vercel |
-| **Backend** | Python 3.12 + FastAPI + asyncio on Fly.io (always-on during market hours) |
-| **Database** | Supabase Postgres + Storage (Neon documented as a drop-in fallback) |
-| **Broker & data** | Alpaca — paper and live, one base URL apart |
-| **ML** | LightGBM, triple-barrier labelling, purged walk-forward validation |
-| **Notifications** | Telegram (free, primary) + Resend email; Twilio SMS optional |
+## Stack
 
-### Before you write any code
+Next.js 15 + TypeScript on Vercel · Python 3.12 + FastAPI + asyncio on Fly.io · Supabase Postgres +
+Storage · Alpaca for brokerage and market data · LightGBM with triple-barrier labelling and purged
+walk-forward validation · Twilio SMS + Resend email.
 
-Read Sections 1–4 of the spec in full, then Appendix B. Three things in particular will change what you
-build if you discover them late:
+## Non-negotiables
 
-1. **The base rates for retail day trading are brutal** (§2.1). The promotion gates in §9.7 exist because of
-   this, they are enforced in code, and there is no override.
-2. **The PDT rule was retired in June 2026** (§2.2). Do not write a $25k gate; do not treat its absence as
-   safety.
-3. **No Twilio A2P campaign is needed** (§13.1) — trial accounts can't register for one anyway, and
-   reviews run 10–15 days. Telegram is the primary channel: free, instant, and it supports inline
-   approve/reject buttons, which beats typing a code back under time pressure.
-
-### The proof of concept comes first
-
-Before any engine code, run the Phase 0 proof of concept through the
-[Alpaca MCP server](https://github.com/alpacahq/alpaca-mcp-server) (paper keys only): pull a quote, place a
-bracket order, watch it fill, close it. One conversation, no code. It validates the account, keys, and order
-semantics and surfaces Alpaca's real response shapes before they get baked into a client.
-
-### Non-negotiables
-
-- Live trading is **Phase 8**, behind eight gates. Paper until then.
+- Live trading is **Phase 8**, behind eight gates. Everything before it runs on paper.
 - Every order passes the risk governor. One code path, no bypass.
-- The operator can halt everything from a phone in under 10 seconds, and that gets tested weekly.
+- The operator can halt everything from a phone in under 10 seconds, tested weekly.
 - Authorization to trade always expires within 24 hours.
+
+## Status
+
+**Phase 0 — not started.** No implementation code exists yet. The specification is complete and the
+open items in §21 are awaiting the operator's answers; **O-1** (data feed budget) and **O-2** (capital
+and maximum acceptable loss) block Phases 1 and 6 respectively.
+
+## A word on expectations
+
+Day trading is overwhelmingly loss-making for individual participants. This project is structured so
+that the parts that tell you the truth — point-in-time data, an honest backtester, validation that
+corrects for multiple testing — come first, and the parts that spend money come last, behind gates.
+If the evidence at Phase 8 says the edge is not there, not going live is a successful outcome
+(§1.5, R-20.9.c).
